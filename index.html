@@ -19,16 +19,17 @@
            cursor: pointer; }
   button.secondary { background: #6b7280; margin-left: 8px; }
   button:hover { opacity: 0.9; }
-  table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; }
-  th, td { padding: 8px; border-bottom: 1px solid #eee; text-align: left; }
-  th { background: #f9fafb; }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
   .hidden { display: none; }
   .error { color: #dc2626; font-size: 13px; margin-top: 8px; }
+  .success { color: #16a34a; font-size: 14px; margin-top: 12px; font-weight: 600; }
   .actions { margin-top: 16px; }
+  .note { font-size: 12px; color: #6b7280; margin-top: 16px; line-height: 1.5; }
 </style>
 </head>
 <body>
 
+<!-- パスワード画面 -->
 <div id="loginScreen" class="container">
   <h1>🔒 経費記録システム</h1>
   <p>パスワードを入力してください。</p>
@@ -39,6 +40,7 @@
   <div id="loginError" class="error"></div>
 </div>
 
+<!-- メイン画面 -->
 <div id="mainScreen" class="container hidden">
   <h1>📒 経費を記録</h1>
   <label>入力者名 <input type="text" id="userName" placeholder="例: 山田太郎"></label>
@@ -55,22 +57,26 @@
   <label>金額 (円) <input type="number" id="amount" min="0"></label>
   <label>メモ <textarea id="memo" rows="2"></textarea></label>
   <div class="actions">
-    <button onclick="addExpense()">記録する</button>
-    <button class="secondary" onclick="exportCSV()">CSVダウンロード</button>
+    <button id="submitBtn" onclick="submitExpense()">記録する</button>
     <button class="secondary" onclick="logout()">ログアウト</button>
   </div>
-
-  <h2 style="margin-top:30px;font-size:18px;">記録一覧</h2>
-  <table id="expenseTable">
-    <thead>
-      <tr><th>日付</th><th>入力者</th><th>項目</th><th>金額</th><th>メモ</th><th></th></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <div id="statusMsg"></div>
+  <p class="note">記録されたデータは管理者のスプレッドシートに自動保存されます。<br>
+     入力者名は毎回入力するか、ブラウザに記憶されます。</p>
 </div>
 
 <script>
   const PASSWORD = "keihi";
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbz35nqhB8SnzW0czjdoy3SmrDQjsZh2fiANTwzzMPxB4HtlhfQjNYSE4jZbvrKKywoU/exec";
+
+  // 入力者名を記憶
+  window.addEventListener('DOMContentLoaded', () => {
+    const savedName = localStorage.getItem('userName');
+    if (savedName) document.getElementById('userName').value = savedName;
+    // 日付の初期値を今日に
+    const today = new Date().toISOString().slice(0,10);
+    document.getElementById('date').value = today;
+  });
 
   function checkPassword() {
     const input = document.getElementById('passwordInput').value;
@@ -78,7 +84,6 @@
       document.getElementById('loginScreen').classList.add('hidden');
       document.getElementById('mainScreen').classList.remove('hidden');
       sessionStorage.setItem('auth', '1');
-      renderTable();
     } else {
       document.getElementById('loginError').textContent = 'パスワードが違います。';
     }
@@ -89,15 +94,13 @@
     location.reload();
   }
 
-  function getData() {
-    return JSON.parse(localStorage.getItem('expenses') || '[]');
+  function showStatus(msg, isError) {
+    const el = document.getElementById('statusMsg');
+    el.textContent = msg;
+    el.className = isError ? 'error' : 'success';
   }
 
-  function saveData(data) {
-    localStorage.setItem('expenses', JSON.stringify(data));
-  }
-
-  function addExpense() {
+  async function submitExpense() {
     const name = document.getElementById('userName').value.trim();
     const date = document.getElementById('date').value;
     const category = document.getElementById('category').value;
@@ -105,61 +108,43 @@
     const memo = document.getElementById('memo').value.trim();
 
     if (!name || !date || !amount) {
-      alert('入力者名・日付・金額は必須です。');
+      showStatus('入力者名・日付・金額は必須です。', true);
       return;
     }
 
-    const data = getData();
-    data.push({ name, date, category, amount, memo, ts: Date.now() });
-    saveData(data);
+    localStorage.setItem('userName', name);
 
-    document.getElementById('amount').value = '';
-    document.getElementById('memo').value = '';
-    renderTable();
-  }
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.textContent = '送信中...';
+    showStatus('', false);
 
-  function deleteExpense(ts) {
-    if (!confirm('削除しますか？')) return;
-    const data = getData().filter(e => e.ts !== ts);
-    saveData(data);
-    renderTable();
-  }
-
-  function renderTable() {
-    const tbody = document.querySelector('#expenseTable tbody');
-    const data = getData().sort((a,b) => b.ts - a.ts);
-    tbody.innerHTML = data.map(e => `
-      <tr>
-        <td>${e.date}</td>
-        <td>${escapeHtml(e.name)}</td>
-        <td>${e.category}</td>
-        <td>¥${Number(e.amount).toLocaleString()}</td>
-        <td>${escapeHtml(e.memo)}</td>
-        <td><button class="secondary" onclick="deleteExpense(${e.ts})">削除</button></td>
-      </tr>`).join('');
-  }
-
-  function escapeHtml(s) {
-    return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
-
-  function exportCSV() {
-    const data = getData();
-    const header = ['日付','入力者','項目','金額','メモ'];
-    const rows = data.map(e => [e.date, e.name, e.category, e.amount, e.memo]);
-    const csv = [header, ...rows].map(r =>
-      r.map(c => `"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
-    const blob = new Blob(['\uFEFF'+csv], {type:'text/csv'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'expenses.csv'; a.click();
-    URL.revokeObjectURL(url);
+    try {
+      // GASにPOST送信（CORS回避のためtext/plainで送る）
+      const res = await fetch(GAS_URL, {
+        method: 'POST',
+        body: JSON.stringify({ name, date, category, amount, memo }),
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+      });
+      const json = await res.json();
+      if (json.result === 'ok') {
+        showStatus('✅ 記録しました！', false);
+        document.getElementById('amount').value = '';
+        document.getElementById('memo').value = '';
+      } else {
+        showStatus('エラー: ' + (json.message || '不明なエラー'), true);
+      }
+    } catch (err) {
+      showStatus('送信失敗: ' + err.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '記録する';
+    }
   }
 
   if (sessionStorage.getItem('auth') === '1') {
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('mainScreen').classList.remove('hidden');
-    renderTable();
   }
   document.getElementById('passwordInput')?.addEventListener('keypress', e => {
     if (e.key === 'Enter') checkPassword();
